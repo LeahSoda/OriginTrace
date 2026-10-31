@@ -1,0 +1,21 @@
+import {config} from 'dotenv';
+import {fileURLToPath as envFileURLToPath} from 'node:url';
+config({path:envFileURLToPath(new URL('../.env', import.meta.url))});
+import express from 'express';
+import cors from 'cors';
+import {mkdir} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {analysisRouter} from './routes/analysis.js';
+
+const app = express();
+const port = Number(process.env.PORT || 3001);
+const uploadDir = join(fileURLToPath(new URL('.', import.meta.url)), 'uploads');
+await mkdir(uploadDir, {recursive:true});
+app.disable('x-powered-by');
+app.use(cors({origin:process.env.FRONTEND_ORIGIN || 'http://localhost:5173'}));
+app.use(express.json({limit:'1mb'}));
+app.get('/api/health', (_req,res)=>res.json({ok:true,vision:Boolean(process.env.MODEL_API_KEY?.trim()),search:Boolean(process.env.TAVILY_API_KEY)}));
+app.use('/api',analysisRouter(uploadDir));
+app.use((err,_req,res,_next)=>res.status(err.status || 400).json({error:err.message || 'Request failed'}));
+app.listen(port,()=>console.log(`OriginTrace backend: http://localhost:${port}`));
