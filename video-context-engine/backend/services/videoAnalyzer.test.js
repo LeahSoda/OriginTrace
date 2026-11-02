@@ -1,3 +1,6 @@
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {test, beforeEach, afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {analyze, visionDescribe} from './videoAnalyzer.js';
@@ -6,11 +9,14 @@ const originalFetch = globalThis.fetch;
 let savedEnv;
 const description = {summary:'A street scene.',visibleClues:['A sign'],searchTerms:['street sign'],uncertainty:['No audio analyzed.']};
 const completion = (content=JSON.stringify(description), finish_reason='stop') =>
-  Response.json({choices:[{finish_reason,message:{content}}]});
+  Response.json({usage:{prompt_tokens:100,completion_tokens:100},choices:[{finish_reason,message:{content}}]});
 
 beforeEach(()=>{
  savedEnv = {...process.env};
- process.env.MODEL_API_KEY='test-meta-key';
+ process.env.META_BUDGET_DB=join(mkdtempSync(join(tmpdir(),'meta-test-')),'budget.sqlite');
+ process.env.META_API_DISABLED='false';
+ process.env.PLATFORM_EXTRACTION_ENABLED='false';
+ process.env.META_API_KEY='test-meta-key';
  delete process.env.META_MODEL;
  delete process.env.TAVILY_API_KEY;
  globalThis.fetch=async()=>{throw new Error('Unexpected network request');};
@@ -37,18 +43,14 @@ test('sends images and schema only to Meta with backend bearer auth',async()=>{
  assert.equal(calls,1);
 });
 
-test('honors configured Meta model',async()=>{
+test('blocks unpriced model without network',async()=>{
  process.env.META_MODEL='another-vision-model';
- globalThis.fetch=async(_url,options)=>{
-   assert.equal(JSON.parse(options.body).model,'another-vision-model');
-   return completion();
- };
- await visionDescribe(['image'],'clip.mp4');
+ await assert.rejects(visionDescribe(['image'],'clip.mp4'),/approved pricing/);
 });
 
 test('skips provider when credentials or frames are absent',async()=>{
  assert.equal(await visionDescribe([],''),null);
- process.env.MODEL_API_KEY=' ';
+ process.env.META_API_KEY=' ';
  assert.equal(await visionDescribe(['image'],''),null);
 });
 
@@ -59,9 +61,10 @@ test('rejects errors, truncated output, refusals, and invalid frontend field typ
    completion('not JSON'),
    completion(JSON.stringify({...description,visibleClues:'wrong'})),
    completion('null'),
-   Response.json({choices:[{finish_reason:'stop',message:{refusal:'refused',content:null}}]}),
+   Response.json({usage:{prompt_tokens:100,completion_tokens:100},choices:[{finish_reason:'stop',message:{refusal:'refused',content:null}}]}),
    Response.json({})
  ]){
+   process.env.META_BUDGET_DB=join(mkdtempSync(join(tmpdir(),'meta-test-')),'budget.sqlite');
    globalThis.fetch=async()=>response;
    await assert.rejects(visionDescribe(['image'],''),error=>{
      assert.match(error.message,/Meta/);
@@ -72,20 +75,19 @@ test('rejects errors, truncated output, refusals, and invalid frontend field typ
 });
 
 test('missing credentials preserve the full frontend response contract without requests',async()=>{
- delete process.env.MODEL_API_KEY;
- process.env.OPENAI_API_KEY='obsolete-key-must-not-be-used';
+ delete process.env.META_API_KEY;
  const report=await analyze({filePath:'/unused',filename:'clip.mp4'});
- assert.deepEqual(Object.keys(report).sort(),['mode','input','summary','visibleClues','searchTerms','earliestAppearance','sources','confidenceNote','uncertainty','status','generatedAt'].sort());
+ assert.deepEqual(Object.keys(report).sort(),['mode','input','summary','visibleClues','searchTerms','earliestAppearance','sources','lifeHistory','confidenceNote','clipText','queries','pipeline','searchDiagnostics','extractedClues','conclusion','uncertainty','status','generatedAt'].sort());
  assert.equal(report.mode,'limited');
  assert.equal(report.input.filename,'clip.mp4');
  for(const field of ['visibleClues','searchTerms','sources','uncertainty']) assert.ok(Array.isArray(report[field]));
- assert.ok(report.uncertainty.some(w=>w.includes('MODEL_API_KEY')));
+ assert.ok(report.uncertainty.some(w=>w.includes('META_API_KEY')));
  assert.equal(report.earliestAppearance,null);
 });
 
-test('URL-only mode remains limited without fetching video bytes',async()=>{
- const report=await analyze({url:'https://www.instagram.com/reel/example'});
+test('inaccessible URL remains limited without fetching video bytes',async()=>{
+ const report=await analyze({url:'https://www.instagram.com/reel/example'},{retrieveContext:async()=>{throw Error('blocked');}});
  assert.equal(report.mode,'limited');
  assert.equal(report.input.host,'www.instagram.com');
- assert.ok(report.uncertainty.some(w=>w.includes('URL-only')));
+ assert.ok(report.uncertainty.some(w=>w.includes('could not be retrieved')));
 });
