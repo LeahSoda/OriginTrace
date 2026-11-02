@@ -1,0 +1,35 @@
+# Secrets at any level; keep the public configuration template.
+.env
+.env.*
+!.env.example
+.aws/
+.ssh/
+.gnupg/
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Browser authentication/session exports used by media tools.
+cookies.txt
+cookies*.txt
+*.cookies
+*.har
+
+# Local dependencies, builds, logs and billing databases.
+node_modules/
+dist/
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Local operating-system metadata.
+.DS_Store
+._*
